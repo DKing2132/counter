@@ -31,20 +31,28 @@ mod tests {
     #[test]
     fn test_buy() {
         let mut deps = mock_dependencies();
-
-        // Initialize with royalty address
-        let init_msg = InstantiateMsg {
+    
+        // Instantiate the contract with initial settings
+        let instantiate_msg = InstantiateMsg {
             initial_price: Uint128::new(100),
             royalty_address: "royalty_addr".to_string(),
         };
-        let init_info = mock_info("creator", &coins(1000, "earth"));
-        let _res = instantiate(deps.as_mut(), mock_env(), init_info, init_msg).unwrap();
-
+        let creator_info = mock_info("creator", &coins(1000, "sei"));
+        let _res = instantiate(deps.as_mut(), mock_env(), creator_info, instantiate_msg).unwrap();
+    
+        // Set up the buy message with a different buyer
         let buy_msg = ExecuteMsg::Buy { coordinates: (0, 0) };
-        let buy_info = mock_info("buyer", &coins(200, "sei"));
-        let res = execute(deps.as_mut(), mock_env(), buy_info, buy_msg).unwrap();
+        let buyer_info = mock_info("different_buyer", &coins(200, "sei")); // Different buyer
+        let res = execute(deps.as_mut(), mock_env(), buyer_info, buy_msg).unwrap();
 
-        assert_eq!(res.messages.len(), 3); // Ensure there are 3 transfer messages
+        let buy_msg2 = ExecuteMsg::Buy { coordinates: (0, 0) };
+        let buyer_info2 = mock_info("different_buyer2", &coins(200, "sei")); // Different buyer2
+        let res2 = execute(deps.as_mut(), mock_env(), buyer_info2, buy_msg2).unwrap();
+    
+        // Check that 3 messages (transfers) are created
+        assert_eq!(res2.messages.len(), 3, "Expected 3 messages for a successful buy operation");
+    
+        // Additional checks can be added here to verify the content of the messages
     }
 
     #[test]

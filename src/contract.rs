@@ -144,7 +144,9 @@ pub fn try_buy(
         .add_attribute("sell_price", sell_price.to_string());
 
     // Create transfer messages if the buyer is not the current owner
+    deps.api.debug("So far so good, the transfer messages are being created");
     if plot.owner != info.sender {
+        deps.api.debug("The buyer is not the owner, so transfer messages will be created");
         let messages = vec![
             BankMsg::Send {
                 to_address: treasury_addr.to_string(),  // Need to change to address of the SC
