@@ -1,13 +1,16 @@
 use cosmwasm_std::Uint128;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use cosmwasm_schema::{cw_serde, QueryResponses};
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct InstantiateMsg {
     pub initial_price: Uint128,
+    pub royalty_address: String, 
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+
+#[cw_serde]
 pub enum ExecuteMsg {
     /// Buy a plot at the given coordinates.
     Buy { coordinates: (i32, i32) },

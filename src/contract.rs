@@ -1,43 +1,37 @@
-// src/contract.rs
+#[cfg(not(feature = "library"))]
 use cosmwasm_std::{
-    to_binary, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128,
+    to_binary, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, entry_point,
 };
-use cw2::set_contract_version;
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg};
-use crate::state::{Plot, PLOTS, TREASURY, POINTS, TOTAL_POINTS, ROYALTY};
+use crate::state::{Plot, PLOTS, TREASURY, POINTS, TOTAL_POINTS, ROYALTY_ADDRESS, INITIAL_PRICE};
 
 // setting a version for the contract
 const CONTRACT_NAME: &str = "crates.io:sei-land";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    
-    // Initialize treasury and points
+    deps.api.debug("So far, so good!");
+
+    let initial_price = msg.initial_price;
+    INITIAL_PRICE.save(deps.storage, &initial_price)?;
+
+    let royalty_addr = deps.api.addr_validate(&msg.royalty_address)?;
+    ROYALTY_ADDRESS.save(deps.storage, &royalty_addr)?;
+
     TREASURY.save(deps.storage, &Uint128::zero())?;
     TOTAL_POINTS.save(deps.storage, &Uint128::zero())?;
-    
-    // Initialize plots with initial price
-    for x in 0..100 {
-        for y in 0..100 {
-            let plot = Plot {
-                coordinates: (x, y),
-                price: msg.initial_price,
-                owner: _info.sender.clone(),
-            };
-            PLOTS.save(deps.storage, (x, y), &plot)?;
-        }
-    }
 
     Ok(Response::new().add_attribute("method", "instantiate"))
 }
 
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     env: Env,
@@ -52,24 +46,73 @@ pub fn execute(
 
 pub fn try_buy(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     coordinates: (i32, i32),
 ) -> Result<Response, ContractError> {
-    let plot = PLOTS.load(deps.storage, coordinates.clone())?;
+    deps.api.debug("This is a debug message");
+
+    let mut response = Response::new();
+
     let sei_amount = info.funds.iter().find(|coin| coin.denom == "sei").map_or(Uint128::zero(), |coin| coin.amount);
-    let treasury_addr = TREASURY.load(deps.storage)?;
-    let royalty_addr = ROYALTY.load(deps.storage)?;
-    
-    // Check if the sent amount of SEI is sufficient
-    if sei_amount < plot.price {
-        return Err(ContractError::InsufficientFunds {});
-    }
+    deps.api.debug("So far, the buyer has sent some sei");
+
+    // Log the sei amount sent by the buyer
+    let sei_log = format!("SEI amount sent by buyer: {}", sei_amount);
+    response = response.add_attribute("sei_amount", sei_log);
+
+    let treasury_addr = match TREASURY.load(deps.storage) {
+        Ok(addr) => {
+            deps.api.debug(&format!("Treasury address loaded: {}", addr));
+            addr
+        },
+        Err(e) => {
+            deps.api.debug(&format!("Failed to load Treasury address: {}", e));
+            return Err(ContractError::CustomError { val: "Failed to load Treasury address".to_string() });
+        }
+    };
+
+    let royalty_addr = match ROYALTY_ADDRESS.load(deps.storage) {
+        Ok(addr) => {
+            deps.api.debug(&format!("Royalty address loaded: {}", addr));
+            addr
+        },
+        Err(e) => {
+            deps.api.debug(&format!("Failed to load Royalty address: {}", e));
+            return Err(ContractError::CustomError { val: "Failed to load Royalty address".to_string() });
+        }
+    };
+
+    deps.api.debug("So far so good, the treasury is initialized");
+
+    let plot_result = PLOTS.may_load(deps.storage, coordinates.clone());
+    let mut plot = match plot_result {
+        Ok(Some(existing_plot)) => existing_plot,
+        Ok(None) => {
+            // Plot does not exist, create a new one with initial price
+            let initial_price = INITIAL_PRICE.load(deps.storage)?;
+            Plot {
+                coordinates,
+                price: initial_price,
+                owner: info.sender.clone(), // Consider if this is the correct logic for your use case
+            }
+        },
+        Err(_) => {
+            // Error loading plot data
+            return Err(ContractError::CustomError { val: "Failed to load plot".to_string() });
+        }
+    };
+
+    deps.api.debug("So far so good, the plot coordinates are valid");
 
     let sell_price = plot.price;
     let treasury_amount = sell_price * Uint128::new(5) / Uint128::new(100);
     let royalty_amount = sell_price * Uint128::new(5) / Uint128::new(100);
     let owner_amount = sell_price - treasury_amount - royalty_amount;
+    // Log amounts being transferred
+    let amounts_log = format!("Treasury Amount: {}, Royalty Amount: {}, Owner Amount: {}", treasury_amount, royalty_amount, owner_amount);
+    response = response.add_attribute("amounts_being_transferred", amounts_log);
+
 
     // Update treasury balance
     TREASURY.update(deps.storage, |balance| -> StdResult<_> {
@@ -93,19 +136,18 @@ pub fn try_buy(
         owner: info.sender.clone(),
     })?;
 
-    // Prepare the response
-    let mut response = Response::new()
-        .add_attribute("action", "buy")
+    // Add details to the response
+    response = response.add_attribute("action", "buy")
         .add_attribute("buyer", info.sender.to_string())
         .add_attribute("seller", plot.owner.to_string())
         .add_attribute("coordinates", format!("{},{}", coordinates.0, coordinates.1))
         .add_attribute("sell_price", sell_price.to_string());
 
-    // Conditionally create transfer messages if the buyer is not the current owner
+    // Create transfer messages if the buyer is not the current owner
     if plot.owner != info.sender {
         let messages = vec![
             BankMsg::Send {
-                to_address: treasury_addr.to_string(),
+                to_address: treasury_addr.to_string(),  // Need to change to address of the SC
                 amount: vec![Coin { denom: "sei".to_string(), amount: treasury_amount }],
             },
             BankMsg::Send {
@@ -120,8 +162,13 @@ pub fn try_buy(
         response = response.add_messages(messages);
     }
 
+    // Log the updated plot details
+    let updated_plot_log = format!("Updated plot: ({}, {}) with new price: {} and new owner: {}", coordinates.0, coordinates.1, sell_price * Uint128::new(2), info.sender);
+    response = response.add_attribute("updated_plot_details", updated_plot_log);
+
     Ok(response)
 }
+
 
 
 pub fn try_claim(
